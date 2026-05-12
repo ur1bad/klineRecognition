@@ -7,7 +7,7 @@ $ErrorActionPreference = "Stop"
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
 $BackendPort = 8000
 $FrontendPort = 8501
-$RemoteApiBaseUrl = "https://u950557-5mw7-915677dc.bjb1.seetacloud.com:8443"
+$RemoteApiBaseUrl = "https://u950557-64gl-d2bb0580.bjb1.seetacloud.com:8443"
 $PythonExe = "python"
 
 $TmpDir = Join-Path $ProjectRoot "outputs\tmp"
