@@ -24,6 +24,13 @@ PAGE_META = {
         "breadcrumb": "首页",
         "subtitle": "系统总览、运行状态与最近识别动态",
     },
+    "market": {
+        "label": "行情中心",
+        "icon": "▥",
+        "title": "行情中心",
+        "breadcrumb": "行情中心",
+        "subtitle": "A股指数、市场涨跌分布与个股实时行情",
+    },
     "upload": {
         "label": "上传K线图识别",
         "icon": "⇪",

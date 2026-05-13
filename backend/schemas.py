@@ -143,3 +143,70 @@ class BacktestResponseSchema(BaseModel):
     future_prices: list[BacktestPricePointSchema]
     record_context: RecognitionRecordSchema
     extra: Optional[dict[str, Any]] = None
+
+
+class MarketIndexSchema(BaseModel):
+    code: str
+    name: str
+    latest_price: Optional[float] = None
+    change_amount: Optional[float] = None
+    change_percent: Optional[float] = None
+    amount: Optional[float] = None
+
+
+class MarketBreadthBucketSchema(BaseModel):
+    label: str
+    count: int
+    tone: str
+
+
+class MarketBreadthSummarySchema(BaseModel):
+    total: int
+    up: int
+    down: int
+    flat: int
+    limit_up: int
+    limit_down: int
+    buckets: list[MarketBreadthBucketSchema] = Field(default_factory=list)
+
+
+class MarketSentimentSchema(BaseModel):
+    score: float = Field(..., ge=0.0, le=10.0)
+    level: str
+    advice: str
+    advance_ratio: float = Field(..., ge=0.0, le=1.0)
+    strong_ratio: float = Field(0.0, ge=0.0, le=1.0)
+    weak_ratio: float = Field(0.0, ge=0.0, le=1.0)
+    mean_change: float = 0.0
+    index_change: Optional[float] = None
+    components: dict[str, float] = Field(default_factory=dict)
+
+
+class MarketStockSchema(BaseModel):
+    code: str
+    name: str
+    latest_price: Optional[float] = None
+    change_percent: Optional[float] = None
+    change_amount: Optional[float] = None
+    turnover_rate: Optional[float] = None
+    amplitude: Optional[float] = None
+    volume: Optional[float] = None
+    amount: Optional[float] = None
+    pe_dynamic: Optional[float] = None
+    market: str
+    board: str
+
+
+class MarketOverviewSchema(BaseModel):
+    updated_at: str
+    source: str
+    indices: list[MarketIndexSchema] = Field(default_factory=list)
+    breadth: MarketBreadthSummarySchema
+    sentiment: MarketSentimentSchema
+    stocks: list[MarketStockSchema] = Field(default_factory=list)
+    top_gainers: list[MarketStockSchema] = Field(default_factory=list)
+    top_losers: list[MarketStockSchema] = Field(default_factory=list)
+    top_amount: list[MarketStockSchema] = Field(default_factory=list)
+    top_turnover: list[MarketStockSchema] = Field(default_factory=list)
+    top_turnover_title: str = "换手率榜"
+    top_turnover_metric: str = "turnover_rate"

@@ -9,6 +9,7 @@ from backend.config import get_config
 from backend.db.database import init_db
 from backend.routes.backtest import router as backtest_router
 from backend.routes.context import router as context_router
+from backend.routes.market import router as market_router
 from backend.routes.prediction import router as prediction_router
 from backend.routes.records import router as records_router
 
@@ -38,6 +39,7 @@ app.include_router(context_router)
 app.include_router(prediction_router)
 app.include_router(records_router)
 app.include_router(backtest_router)
+app.include_router(market_router)
 
 
 @app.on_event("startup")

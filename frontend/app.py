@@ -3,6 +3,7 @@ from __future__ import annotations
 from frontend.pages.backtest import render_backtest_page
 from frontend.pages.generate import render_auto_page
 from frontend.pages.home import render_home_page
+from frontend.pages.market import render_market_page
 from frontend.pages.records import render_history_page
 from frontend.pages.upload import render_upload_page
 from frontend.shared import (
@@ -27,6 +28,8 @@ def main() -> None:
 
     if current_page == "home":
         render_home_page(health, health_error)
+    elif current_page == "market":
+        render_market_page()
     elif current_page == "upload":
         render_upload_page()
     elif current_page == "generate":
