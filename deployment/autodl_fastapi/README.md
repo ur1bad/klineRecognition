@@ -62,7 +62,7 @@ export KLINE_LORA_DIR=/root/autodl-tmp/adapters/kline_lora_v3_lr5e5_ep5
 ```bash
 export KLINE_SERVER_HOST=0.0.0.0
 export KLINE_SERVER_PORT=6006
-export KLINE_MODEL_NAME="Qwen2.5-VL + LoRA"
+export KLINE_MODEL_NAME="Qwen2.5-VL-7B-Instruct + LoRA"
 export KLINE_DEVICE=auto
 export KLINE_TORCH_DTYPE=auto
 export KLINE_ATTN_IMPLEMENTATION=sdpa
@@ -95,8 +95,7 @@ bash start.sh
 
 你的本地项目后端现在已经支持两种远程模式：
 
-- `openai_compat`：旧的 `vLLM /v1/chat/completions`
-- `custom_fastapi`：现在这个新的 AutoDL FastAPI 服务
+- `custom_fastapi`：调用这个 AutoDL FastAPI 服务的 `/predict` 接口
 
 你现在要切到新的方式，所以在本地项目启动前设置：
 
@@ -106,7 +105,7 @@ $env:KLINE_REMOTE_API_PROTOCOL="custom_fastapi"
 $env:KLINE_REMOTE_API_BASE_URL="http://你的AutoDL公网IP:6006"
 $env:KLINE_REMOTE_API_PREDICT_PATH="/predict"
 $env:KLINE_REMOTE_API_HEALTH_PATH="/health"
-$env:KLINE_REMOTE_API_DISPLAY_NAME="Qwen2.5-VL + LoRA"
+$env:KLINE_REMOTE_API_DISPLAY_NAME="Qwen2.5-VL-7B-Instruct + LoRA"
 ```
 
 然后照常启动你本地项目后端：
@@ -132,7 +131,7 @@ curl -X POST "http://127.0.0.1:6006/predict" \
   "confidence": 0.78,
   "reason": "图中出现两个相近低点，中间存在明显反弹，符合双底特征。",
   "raw_output": "双底",
-  "backend_mode": "Qwen2.5-VL + LoRA"
+  "inference_model": "Qwen2.5-VL-7B-Instruct + LoRA"
 }
 ```
 

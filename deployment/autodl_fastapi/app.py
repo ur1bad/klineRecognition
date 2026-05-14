@@ -221,7 +221,7 @@ def get_service_config() -> ServiceConfig:
         raise RuntimeError("KLINE_LORA_DIR does not exist. Please point it to your LoRA adapter directory.")
 
     processor_source = resolve_processor_source(model_base_dir, lora_dir)
-    default_model_name = "Qwen2.5-VL-7B-Instruct"
+    default_model_name = "Qwen2.5-VL-7B-Instruct + LoRA"
 
     attn_implementation = os.getenv("KLINE_ATTN_IMPLEMENTATION", "sdpa").strip()
     return ServiceConfig(
@@ -247,7 +247,7 @@ class PredictionResponse(BaseModel):
     confidence: float = Field(..., ge=0.0, le=1.0)
     reason: str
     raw_output: str
-    backend_mode: str
+    inference_model: str
 
 
 class HealthResponse(BaseModel):
@@ -400,7 +400,7 @@ class QwenLoRAInferenceService:
             "confidence": confidence,
             "reason": reason,
             "raw_output": raw_output,
-            "backend_mode": self.config.model_name,
+            "inference_model": self.config.model_name,
         }
 
 

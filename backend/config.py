@@ -9,22 +9,19 @@ from typing import Callable, Iterable, Optional
 from urllib.parse import urlparse
 
 
-DEFAULT_REMOTE_API_PROTOCOL = "openai_compat"
-DEFAULT_REMOTE_API_BASE_URL = "http://127.0.0.1:6006/v1"
-DEFAULT_REMOTE_API_MODEL = "kline-lora"
-DEFAULT_REMOTE_API_DISPLAY_NAME = "Qwen2.5-VL-7B-Instruct"
-DEFAULT_REMOTE_API_KEY = "EMPTY"
+DEFAULT_REMOTE_API_PROTOCOL = "custom_fastapi"
+DEFAULT_REMOTE_API_BASE_URL = "http://127.0.0.1:6006"
+DEFAULT_REMOTE_API_DISPLAY_NAME = "Qwen2.5-VL-7B-Instruct + LoRA"
 DEFAULT_REMOTE_API_TIMEOUT = 300
 DEFAULT_REMOTE_API_PREDICT_PATH = "/predict"
 DEFAULT_REMOTE_API_HEALTH_PATH = "/health"
+DEFAULT_AUTH_TOKEN_EXPIRE_MINUTES = 24 * 60
 
 REMOTE_API_PROTOCOL_ALIASES = {
-    "openai": "openai_compat",
-    "openai_compat": "openai_compat",
-    "vllm": "openai_compat",
     "custom_fastapi": "custom_fastapi",
     "fastapi": "custom_fastapi",
     "fastapi_qwen_lora": "custom_fastapi",
+    "predict": "custom_fastapi",
     "qwen_lora_fastapi": "custom_fastapi",
 }
 
@@ -36,26 +33,19 @@ def _env_path(name: str) -> Optional[Path]:
     return Path(value).expanduser().resolve()
 
 
-def _env_bool(name: str, default: bool) -> bool:
-    value = os.getenv(name)
-    if value is None:
-        return default
-    return value.strip().lower() in {"1", "true", "yes", "on"}
-
-
 def _normalize_remote_api_protocol(value: str) -> str:
     key = (value or "").strip().lower()
     return REMOTE_API_PROTOCOL_ALIASES.get(key, DEFAULT_REMOTE_API_PROTOCOL)
 
 
-def _normalize_remote_api_base_url(value: str, protocol: str) -> str:
+def _normalize_remote_api_base_url(value: str) -> str:
     cleaned = value.strip().rstrip("/")
     if not cleaned:
         return cleaned
 
     parsed = urlparse(cleaned)
-    if protocol == "openai_compat" and parsed.scheme in {"http", "https"} and parsed.netloc and parsed.path in {"", "/"}:
-        return parsed._replace(path="/v1").geturl().rstrip("/")
+    if parsed.scheme in {"http", "https"} and parsed.netloc and parsed.path.rstrip("/") == "/v1":
+        return parsed._replace(path="").geturl().rstrip("/")
 
     return cleaned
 
@@ -163,16 +153,17 @@ class AppConfig:
     model_device: str
     model_max_new_tokens: int
     model_temperature: float
-    allow_rule_fallback: bool
     inference_backend: str
     remote_api_protocol: str
     remote_api_base_url: str
     remote_api_predict_path: str
     remote_api_health_path: str
-    remote_api_key: str
-    remote_api_model: str
     remote_api_display_name: str
     remote_api_timeout: int
+    auth_secret: str
+    auth_token_expire_minutes: int
+    default_admin_username: str
+    default_admin_password: str
     static_mount_path: str = "/outputs"
 
     def ensure_directories(self) -> None:
@@ -189,11 +180,7 @@ class AppConfig:
 
     @property
     def remote_api_enabled(self) -> bool:
-        if not self.remote_api_base_url.strip():
-            return False
-        if self.remote_api_protocol == "openai_compat":
-            return bool(self.remote_api_model.strip())
-        return True
+        return bool(self.remote_api_base_url.strip())
 
 
 @lru_cache(maxsize=1)
@@ -245,7 +232,7 @@ def get_config() -> AppConfig:
         generated_dir=outputs_dir / "generated",
         backtests_dir=outputs_dir / "backtests",
         temp_dir=outputs_dir / "tmp",
-        database_path=project_root / "data" / "kline_records.sqlite3",
+        database_path=project_root / "data" / "kline_system.sqlite3",
         model_base_dir=model_base_dir,
         lora_dir=lora_dir,
         backend_host=os.getenv("BACKEND_HOST", "127.0.0.1"),
@@ -254,12 +241,10 @@ def get_config() -> AppConfig:
         model_device=os.getenv("KLINE_MODEL_DEVICE", "auto").strip().lower(),
         model_max_new_tokens=int(os.getenv("KLINE_MODEL_MAX_NEW_TOKENS", "160")),
         model_temperature=float(os.getenv("KLINE_MODEL_TEMPERATURE", "0.0")),
-        allow_rule_fallback=_env_bool("KLINE_ALLOW_RULE_FALLBACK", True),
         inference_backend=os.getenv("KLINE_INFERENCE_BACKEND", "remote_api").strip().lower(),
         remote_api_protocol=remote_api_protocol,
         remote_api_base_url=_normalize_remote_api_base_url(
             os.getenv("KLINE_REMOTE_API_BASE_URL", DEFAULT_REMOTE_API_BASE_URL),
-            remote_api_protocol,
         ),
         remote_api_predict_path=_normalize_api_path(
             os.getenv("KLINE_REMOTE_API_PREDICT_PATH", DEFAULT_REMOTE_API_PREDICT_PATH),
@@ -269,12 +254,16 @@ def get_config() -> AppConfig:
             os.getenv("KLINE_REMOTE_API_HEALTH_PATH", DEFAULT_REMOTE_API_HEALTH_PATH),
             DEFAULT_REMOTE_API_HEALTH_PATH,
         ),
-        remote_api_key=os.getenv("KLINE_REMOTE_API_KEY", DEFAULT_REMOTE_API_KEY).strip(),
-        remote_api_model=os.getenv("KLINE_REMOTE_API_MODEL", DEFAULT_REMOTE_API_MODEL).strip(),
         remote_api_display_name=os.getenv(
             "KLINE_REMOTE_API_DISPLAY_NAME", DEFAULT_REMOTE_API_DISPLAY_NAME
         ).strip(),
         remote_api_timeout=int(os.getenv("KLINE_REMOTE_API_TIMEOUT", str(DEFAULT_REMOTE_API_TIMEOUT))),
+        auth_secret=os.getenv("KLINE_AUTH_SECRET", "kline-system-local-auth-secret").strip(),
+        auth_token_expire_minutes=int(
+            os.getenv("KLINE_AUTH_TOKEN_EXPIRE_MINUTES", str(DEFAULT_AUTH_TOKEN_EXPIRE_MINUTES))
+        ),
+        default_admin_username=os.getenv("KLINE_DEFAULT_ADMIN_USERNAME", "admin").strip(),
+        default_admin_password=os.getenv("KLINE_DEFAULT_ADMIN_PASSWORD", "admin123456").strip(),
     )
     config.ensure_directories()
     return config

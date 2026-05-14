@@ -7,11 +7,14 @@ from fastapi.staticfiles import StaticFiles
 
 from backend.config import get_config
 from backend.db.database import init_db
+from backend.routes.auth import router as auth_router
 from backend.routes.backtest import router as backtest_router
 from backend.routes.context import router as context_router
 from backend.routes.market import router as market_router
 from backend.routes.prediction import router as prediction_router
 from backend.routes.records import router as records_router
+from backend.routes.users import router as users_router
+from backend.services.auth_service import AuthService
 
 
 config = get_config()
@@ -35,17 +38,20 @@ app.add_middleware(
 )
 
 app.mount(config.static_mount_path, StaticFiles(directory=str(config.outputs_dir)), name="outputs")
+app.include_router(auth_router)
 app.include_router(context_router)
 app.include_router(prediction_router)
 app.include_router(records_router)
 app.include_router(backtest_router)
 app.include_router(market_router)
+app.include_router(users_router)
 
 
 @app.on_event("startup")
 async def on_startup() -> None:
     config.ensure_directories()
     init_db()
+    AuthService().ensure_default_admin()
 
 
 @app.get("/")
@@ -97,7 +103,6 @@ def health() -> dict[str, object]:
         "remote_api_base_url": config.remote_api_base_url,
         "remote_api_predict_path": config.remote_api_predict_path,
         "remote_api_health_path": config.remote_api_health_path,
-        "remote_api_model": config.remote_api_model,
         "model_base_dir_found": bool(config.model_base_dir and config.model_base_dir.exists()),
         "lora_dir_found": bool(config.lora_dir and config.lora_dir.exists()),
         "model_base_dir": str(config.model_base_dir) if config.model_base_dir else "",

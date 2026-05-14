@@ -5,6 +5,7 @@ import os
 from datetime import date, datetime
 from html import escape
 from typing import Any, Optional
+from uuid import uuid4
 
 import altair as alt
 import pandas as pd
@@ -15,6 +16,8 @@ import streamlit as st
 BACKEND_URL = os.getenv("STREAMLIT_BACKEND_URL", "http://127.0.0.1:8000").rstrip("/")
 DEFAULT_PAGE = "home"
 DEFAULT_BACKTEST_HORIZON = 3
+AUTH_SESSION_PARAM = "auth_sid"
+AUTH_SESSION_CACHE: dict[str, dict[str, Any]] = {}
 PATTERN_OPTIONS = ["", "头肩顶", "头肩底", "双顶", "双底", "上升三角形", "下降三角形", "无明显形态"]
 PAGE_META = {
     "home": {
@@ -30,6 +33,14 @@ PAGE_META = {
         "title": "行情中心",
         "breadcrumb": "行情中心",
         "subtitle": "A股指数、市场涨跌分布与个股实时行情",
+    },
+    "stock_detail": {
+        "label": "股票详情",
+        "icon": "▤",
+        "title": "股票详情",
+        "breadcrumb": "行情中心 / 股票详情",
+        "subtitle": "查看单只股票的实时行情、关键指标与近期走势",
+        "hidden": True,
     },
     "upload": {
         "label": "上传K线图识别",
@@ -58,6 +69,21 @@ PAGE_META = {
         "title": "回测分析",
         "breadcrumb": "回测分析",
         "subtitle": "基于识别结果和股票历史信息验证识别信号有效性",
+    },
+    "profile": {
+        "label": "个人中心",
+        "icon": "◉",
+        "title": "个人中心",
+        "breadcrumb": "个人中心",
+        "subtitle": "查看当前账号信息并修改登录密码",
+    },
+    "users": {
+        "label": "用户管理",
+        "icon": "☰",
+        "title": "用户管理",
+        "breadcrumb": "用户管理",
+        "subtitle": "管理员账号维护、角色分配与状态管理",
+        "admin_only": True,
     },
 }
 SOURCE_TYPE_MAP = {
@@ -267,6 +293,90 @@ def inject_css() -> None:
             background: rgba(255,255,255,0.11);
             font-size: 0.76rem;
             color: #f4f8ff;
+        }
+        .st-key-sidebar-account-panel {
+            position: relative;
+            margin-top: 0.95rem;
+            margin-bottom: 0.65rem;
+            padding: 0.82rem 0.95rem;
+            min-height: 80px;
+            border-radius: 18px;
+            background: linear-gradient(180deg, rgba(255,255,255,0.08), rgba(255,255,255,0.05));
+            border: 1px solid rgba(255,255,255,0.08);
+            color: #eef4ff;
+        }
+        .st-key-sidebar-account-panel .sidebar-account-grid {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            grid-template-rows: auto auto;
+            column-gap: 0.7rem;
+            row-gap: 0.45rem;
+            align-items: center;
+        }
+        .st-key-sidebar-account-panel .footer-label {
+            color: rgba(223, 233, 248, 0.72);
+            font-size: 0.72rem;
+            line-height: 1;
+            grid-column: 1;
+            grid-row: 1;
+        }
+        .st-key-sidebar-account-panel .footer-value {
+            font-size: 0.86rem;
+            line-height: 1.15;
+            word-break: break-all;
+            grid-column: 1;
+            grid-row: 2;
+        }
+        .st-key-sidebar-account-panel .footer-status {
+            display: inline-flex;
+            align-items: center;
+            min-height: 25px;
+            padding: 0 0.54rem;
+            border-radius: 999px;
+            background: rgba(255,255,255,0.09);
+            border: 1px solid rgba(223, 233, 248, 0.10);
+            font-size: 0.70rem;
+            font-weight: 600;
+            color: rgba(237, 244, 255, 0.84);
+            line-height: 1;
+            grid-column: 2;
+            grid-row: 1;
+            justify-self: end;
+        }
+        [data-testid="stSidebar"] .st-key-sidebar-account-panel .st-key-auth_logout_button {
+            position: absolute;
+            right: 1.34rem;
+            top: 2.58rem;
+            width: auto !important;
+        }
+        [data-testid="stSidebar"] .st-key-sidebar-account-panel .st-key-auth_logout_button .stButton {
+            margin-bottom: 0 !important;
+        }
+        [data-testid="stSidebar"] .st-key-sidebar-account-panel .st-key-auth_logout_button button {
+            width: auto !important;
+            min-height: 25px !important;
+            height: 25px !important;
+            border-radius: 999px !important;
+            border: 0 !important;
+            background: transparent !important;
+            color: rgba(223, 233, 248, 0.66) !important;
+            box-shadow: none !important;
+            font-weight: 600 !important;
+            justify-content: center !important;
+            padding: 0 0.18rem !important;
+            margin-left: auto !important;
+        }
+        [data-testid="stSidebar"] .st-key-sidebar-account-panel .stButton > button p,
+        [data-testid="stSidebar"] .st-key-sidebar-account-panel .stButton > button span {
+            color: inherit !important;
+            font-size: 0.70rem !important;
+            font-weight: 600 !important;
+            line-height: 1 !important;
+        }
+        [data-testid="stSidebar"] .st-key-sidebar-account-panel .st-key-auth_logout_button button:hover {
+            background: rgba(255, 255, 255, 0.055) !important;
+            color: rgba(255, 255, 255, 0.92) !important;
+            transform: none !important;
         }
         .topbar {
             display: flex;
@@ -1016,6 +1126,129 @@ def inject_css() -> None:
             border-color: #2d67b7 !important;
             box-shadow: 0 0 0 3px rgba(45, 103, 183, 0.16) !important;
         }
+        :is(
+            .st-key-upload_stock_code,
+            .st-key-upload_start_date,
+            .st-key-upload_end_date,
+            .st-key-upload_window_size,
+            .st-key-generate_stock_code,
+            .st-key-generate_start_date,
+            .st-key-generate_end_date,
+            .st-key-generate_window_size,
+            .st-key-history_limit_text,
+            .st-key-market_keyword
+        ) div[data-baseweb="input"],
+        .st-key-history-filter-panel .stTextInput div[data-baseweb="input"] {
+            min-height: 46px;
+            border: 1px solid rgba(197, 214, 234, 0.92) !important;
+            border-radius: 14px !important;
+            background: rgba(239, 246, 252, 0.92) !important;
+            box-shadow: none !important;
+            overflow: hidden !important;
+        }
+        :is(
+            .st-key-upload_stock_code,
+            .st-key-upload_start_date,
+            .st-key-upload_end_date,
+            .st-key-upload_window_size,
+            .st-key-generate_stock_code,
+            .st-key-generate_start_date,
+            .st-key-generate_end_date,
+            .st-key-generate_window_size,
+            .st-key-history_limit_text,
+            .st-key-market_keyword
+        ) div[data-baseweb="input"] > div,
+        .st-key-history-filter-panel .stTextInput div[data-baseweb="input"] > div {
+            min-height: 46px;
+            border: 0 !important;
+            border-radius: 14px !important;
+            background: transparent !important;
+            box-shadow: none !important;
+        }
+        :is(
+            .st-key-upload_stock_code,
+            .st-key-upload_start_date,
+            .st-key-upload_end_date,
+            .st-key-upload_window_size,
+            .st-key-generate_stock_code,
+            .st-key-generate_start_date,
+            .st-key-generate_end_date,
+            .st-key-generate_window_size,
+            .st-key-history_limit_text,
+            .st-key-market_keyword
+        ) input,
+        .st-key-history-filter-panel .stTextInput input {
+            color: var(--text-main) !important;
+            background: transparent !important;
+            font-size: 0.95rem !important;
+        }
+        :is(
+            .st-key-upload_stock_code,
+            .st-key-upload_start_date,
+            .st-key-upload_end_date,
+            .st-key-upload_window_size,
+            .st-key-generate_stock_code,
+            .st-key-generate_start_date,
+            .st-key-generate_end_date,
+            .st-key-generate_window_size,
+            .st-key-history_limit_text,
+            .st-key-market_keyword
+        ) input::placeholder,
+        .st-key-history-filter-panel .stTextInput input::placeholder {
+            color: #90a0b6 !important;
+            opacity: 1 !important;
+        }
+        :is(
+            .st-key-upload_stock_code,
+            .st-key-upload_start_date,
+            .st-key-upload_end_date,
+            .st-key-upload_window_size,
+            .st-key-generate_stock_code,
+            .st-key-generate_start_date,
+            .st-key-generate_end_date,
+            .st-key-generate_window_size,
+            .st-key-history_limit_text,
+            .st-key-market_keyword
+        ) input:-webkit-autofill,
+        .st-key-history-filter-panel .stTextInput input:-webkit-autofill {
+            -webkit-box-shadow: 0 0 0 1000px rgba(239, 246, 252, 0.92) inset !important;
+            -webkit-text-fill-color: var(--text-main) !important;
+        }
+        :is(.st-key-upload_window_size, .st-key-generate_window_size) .stNumberInput div[data-baseweb="input"] {
+            align-items: stretch !important;
+        }
+        :is(.st-key-upload_window_size, .st-key-generate_window_size) .stNumberInput div[data-baseweb="input"] [data-baseweb="input-enhancer"],
+        :is(.st-key-upload_window_size, .st-key-generate_window_size) .stNumberInput div[data-baseweb="input"] [data-baseweb="input-enhancer"] > div {
+            min-height: 46px !important;
+            border-left: 1px solid rgba(197, 214, 234, 0.72) !important;
+            background: transparent !important;
+            box-shadow: none !important;
+        }
+        :is(.st-key-upload_window_size, .st-key-generate_window_size) .stNumberInput button,
+        :is(.st-key-upload_window_size, .st-key-generate_window_size) .stNumberInput [data-testid="stNumberInputStepDown"],
+        :is(.st-key-upload_window_size, .st-key-generate_window_size) .stNumberInput [data-testid="stNumberInputStepUp"] {
+            min-height: 46px !important;
+            height: 46px !important;
+            min-width: 32px !important;
+            border: 0 !important;
+            border-left: 1px solid rgba(197, 214, 234, 0.72) !important;
+            border-radius: 0 !important;
+            background: rgba(239, 246, 252, 0.92) !important;
+            color: var(--text-main) !important;
+            box-shadow: none !important;
+        }
+        :is(.st-key-upload_window_size, .st-key-generate_window_size) .stNumberInput button:hover,
+        :is(.st-key-upload_window_size, .st-key-generate_window_size) .stNumberInput [data-testid="stNumberInputStepDown"]:hover,
+        :is(.st-key-upload_window_size, .st-key-generate_window_size) .stNumberInput [data-testid="stNumberInputStepUp"]:hover {
+            background: rgba(226, 238, 249, 0.98) !important;
+            color: #1f5f96 !important;
+        }
+        :is(.st-key-upload_window_size, .st-key-generate_window_size) .stNumberInput button svg,
+        :is(.st-key-upload_window_size, .st-key-generate_window_size) .stNumberInput [data-testid="stNumberInputStepDown"] svg,
+        :is(.st-key-upload_window_size, .st-key-generate_window_size) .stNumberInput [data-testid="stNumberInputStepUp"] svg {
+            color: inherit !important;
+            fill: currentColor !important;
+        }
         [data-testid="stFileUploader"] section,
         [data-testid="stFileUploaderDropzone"] {
             border-radius: 20px;
@@ -1273,31 +1506,173 @@ def _extract_error_message(response: requests.Response) -> str:
     return response.text or f"HTTP {response.status_code}"
 
 
+def get_auth_token() -> str:
+    return str(st.session_state.get("auth_token") or "").strip()
+
+
+def _get_query_param_value(key: str, default: str = "") -> str:
+    value = st.query_params.get(key, default)
+    if isinstance(value, list):
+        value = value[0] if value else default
+    return str(value or default).strip()
+
+
+def _drop_query_param(key: str) -> None:
+    try:
+        st.query_params.pop(key, None)
+    except Exception:
+        try:
+            del st.query_params[key]
+        except Exception:
+            pass
+
+
+def get_auth_session_id() -> str:
+    session_id = str(st.session_state.get("auth_sid") or "").strip()
+    if session_id:
+        return session_id
+    return _get_query_param_value(AUTH_SESSION_PARAM)
+
+
+def cache_auth_state() -> None:
+    session_id = get_auth_session_id()
+    token = get_auth_token()
+    user = get_authenticated_user()
+    if not session_id or not token or not user:
+        return
+    AUTH_SESSION_CACHE[session_id] = {
+        "auth_token": token,
+        "current_user": user,
+    }
+
+
+def restore_auth_state_from_cache() -> bool:
+    session_id = _get_query_param_value(AUTH_SESSION_PARAM)
+    if not session_id:
+        return False
+
+    cached = AUTH_SESSION_CACHE.get(session_id)
+    if not cached:
+        st.session_state.pop("auth_sid", None)
+        _drop_query_param(AUTH_SESSION_PARAM)
+        return False
+
+    st.session_state["auth_sid"] = session_id
+    st.session_state["auth_token"] = str(cached.get("auth_token") or "")
+    st.session_state["current_user"] = cached.get("current_user")
+    return is_authenticated()
+
+
+def get_authenticated_user() -> Optional[dict[str, Any]]:
+    user = st.session_state.get("current_user")
+    return user if isinstance(user, dict) else None
+
+
+def is_authenticated() -> bool:
+    return bool(get_auth_token() and get_authenticated_user())
+
+
+def is_admin() -> bool:
+    user = get_authenticated_user()
+    return bool(user and user.get("role") == "admin")
+
+
+def auth_headers() -> dict[str, str]:
+    token = get_auth_token()
+    return {"Authorization": f"Bearer {token}"} if token else {}
+
+
+def clear_auth_state() -> None:
+    session_id = get_auth_session_id()
+    if session_id:
+        AUTH_SESSION_CACHE.pop(session_id, None)
+    for key in [
+        "auth_sid",
+        "auth_token",
+        "current_user",
+        "auth_view",
+        "page",
+        "selected_backtest_record_id",
+        "upload_result",
+        "upload_backtest_result",
+        "upload_backtest_error",
+        "generate_result",
+        "generate_backtest_result",
+        "generate_backtest_error",
+        "backtest_result",
+        "backtest_result_key",
+        "backtest_autorun_request",
+    ]:
+        st.session_state.pop(key, None)
+    _drop_query_param(AUTH_SESSION_PARAM)
+
+
+def store_auth_payload(payload: dict[str, Any]) -> None:
+    session_id = uuid4().hex
+    st.session_state["auth_sid"] = session_id
+    st.session_state["auth_token"] = str(payload.get("access_token") or "")
+    st.session_state["current_user"] = payload.get("user") or {}
+    cache_auth_state()
+    st.session_state["page"] = DEFAULT_PAGE
+    st.query_params[AUTH_SESSION_PARAM] = session_id
+    st.query_params["page"] = DEFAULT_PAGE
+
+
+def refresh_current_user() -> bool:
+    if not get_auth_token():
+        return False
+    try:
+        user = api_get("/auth/me")
+    except Exception:
+        clear_auth_state()
+        return False
+    st.session_state["current_user"] = user
+    cache_auth_state()
+    return True
+
+
+def _handle_auth_failure(response: requests.Response) -> None:
+    if response.status_code == 401 and get_auth_token():
+        clear_auth_state()
+
+
 def api_get(path: str, params: Optional[dict[str, Any]] = None) -> dict[str, Any]:
     clean_params = {key: value for key, value in (params or {}).items() if value not in (None, "")}
-    response = requests.get(f"{BACKEND_URL}{path}", params=clean_params, timeout=120)
+    response = requests.get(f"{BACKEND_URL}{path}", params=clean_params, headers=auth_headers(), timeout=120)
     if not response.ok:
+        _handle_auth_failure(response)
         raise RuntimeError(_extract_error_message(response))
     return response.json()
 
 
 def api_post_json(path: str, payload: dict[str, Any]) -> dict[str, Any]:
-    response = requests.post(f"{BACKEND_URL}{path}", json=payload, timeout=600)
+    response = requests.post(f"{BACKEND_URL}{path}", json=payload, headers=auth_headers(), timeout=600)
     if not response.ok:
+        _handle_auth_failure(response)
         raise RuntimeError(_extract_error_message(response))
     return response.json()
 
 
 def api_post_multipart(path: str, files: dict[str, Any], data: dict[str, Any]) -> dict[str, Any]:
-    response = requests.post(f"{BACKEND_URL}{path}", files=files, data=data, timeout=600)
+    response = requests.post(f"{BACKEND_URL}{path}", files=files, data=data, headers=auth_headers(), timeout=600)
     if not response.ok:
+        _handle_auth_failure(response)
+        raise RuntimeError(_extract_error_message(response))
+    return response.json()
+
+
+def api_patch_json(path: str, payload: dict[str, Any]) -> dict[str, Any]:
+    response = requests.patch(f"{BACKEND_URL}{path}", json=payload, headers=auth_headers(), timeout=120)
+    if not response.ok:
+        _handle_auth_failure(response)
         raise RuntimeError(_extract_error_message(response))
     return response.json()
 
 
 def api_delete(path: str) -> dict[str, Any]:
-    response = requests.delete(f"{BACKEND_URL}{path}", timeout=120)
+    response = requests.delete(f"{BACKEND_URL}{path}", headers=auth_headers(), timeout=120)
     if not response.ok:
+        _handle_auth_failure(response)
         raise RuntimeError(_extract_error_message(response))
     if not response.content:
         return {}
@@ -1306,14 +1681,32 @@ def api_delete(path: str) -> dict[str, Any]:
 
 def initialize_state() -> None:
     """初始化页面状态，并与 query params 做轻量同步。"""
+    st.session_state.setdefault("auth_sid", _get_query_param_value(AUTH_SESSION_PARAM))
+    st.session_state.setdefault("auth_token", "")
+    st.session_state.setdefault("current_user", None)
+    restored_auth = False
+    if not get_auth_token():
+        restored_auth = restore_auth_state_from_cache()
+    if get_auth_token() and (restored_auth or not get_authenticated_user()):
+        refresh_current_user()
+    if is_authenticated():
+        cache_auth_state()
+        session_id = get_auth_session_id()
+        if session_id:
+            st.query_params[AUTH_SESSION_PARAM] = session_id
+
     valid_keys = set(PAGE_META.keys())
     query_page = st.query_params.get("page", DEFAULT_PAGE)
     if isinstance(query_page, list):
         query_page = query_page[0] if query_page else DEFAULT_PAGE
     default_page = query_page if query_page in valid_keys else DEFAULT_PAGE
+    if PAGE_META.get(default_page, {}).get("admin_only") and not is_admin():
+        default_page = DEFAULT_PAGE
 
     st.session_state.setdefault("page", default_page)
     if query_page in valid_keys and st.session_state["page"] != query_page:
+        if PAGE_META.get(query_page, {}).get("admin_only") and not is_admin():
+            query_page = DEFAULT_PAGE
         st.session_state["page"] = query_page
 
     st.session_state.setdefault("selected_backtest_record_id", None)
@@ -1384,6 +1777,8 @@ def set_page(page_key: str) -> None:
     """切换当前页面，并保证刷新后状态仍然保留。"""
     if page_key not in PAGE_META:
         return
+    if PAGE_META[page_key].get("admin_only") and not is_admin():
+        return
     current_page = get_current_page()
     if current_page == "upload" and page_key != "upload":
         reset_upload_page_state()
@@ -1400,7 +1795,11 @@ def set_page(page_key: str) -> None:
 
 def get_current_page() -> str:
     page = st.session_state.get("page", DEFAULT_PAGE)
-    return page if page in PAGE_META else DEFAULT_PAGE
+    if page not in PAGE_META:
+        return DEFAULT_PAGE
+    if PAGE_META[page].get("admin_only") and not is_admin():
+        return DEFAULT_PAGE
+    return page
 
 
 def load_health_status() -> tuple[Optional[dict[str, Any]], Optional[str]]:
@@ -1487,11 +1886,13 @@ def model_display_text(value: Optional[str] = None) -> str:
     text = str(value or "").strip()
     lowered = text.lower()
     if (
-        not text
-        or lowered in {"remote_api", "openai_compat", "custom_fastapi"}
+            not text
+            or lowered in {"remote_api", "custom_fastapi"}
         or lowered.startswith("qwen2.5-vl + lora")
     ):
-        return "Qwen2.5-VL-7B-Instruct"
+        return "Qwen2.5-VL-7B-Instruct + LoRA"
+    if lowered == "qwen2.5-vl-7b-instruct":
+        return "Qwen2.5-VL-7B-Instruct + LoRA"
     return text
 
 
@@ -1653,6 +2054,8 @@ def render_fixed_image_preview(image_src: str, caption: str) -> None:
 def render_sidebar(current_page: str, health: Optional[dict[str, Any]], health_error: Optional[str]) -> None:
     """渲染深绿色后台风格的侧边导航。"""
     backend_status = "后端在线" if health and health.get("status") == "ok" else "后端离线"
+    user = get_authenticated_user() or {}
+    role_text = "管理员" if user.get("role") == "admin" else "普通用户"
 
     with st.sidebar:
         st.markdown(
@@ -1689,6 +2092,10 @@ def render_sidebar(current_page: str, health: Optional[dict[str, Any]], health_e
         )
 
         for page_key, meta in PAGE_META.items():
+            if meta.get("hidden"):
+                continue
+            if meta.get("admin_only") and not is_admin():
+                continue
             if st.button(
                 f"{meta['icon']}  {meta['label']}",
                 key=f"nav_{page_key}",
@@ -1696,6 +2103,21 @@ def render_sidebar(current_page: str, health: Optional[dict[str, Any]], health_e
                 use_container_width=True,
             ):
                 set_page(page_key)
+
+        with st.container(key="sidebar-account-panel"):
+            st.markdown(
+                f"""
+                <div class="sidebar-account-grid">
+                    <div class="footer-label">当前账号</div>
+                    <div class="footer-value">{escape(str(user.get("username") or "-"))}</div>
+                    <div class="footer-status">{escape(role_text)}</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+            if st.button("退出", key="auth_logout_button", use_container_width=False):
+                clear_auth_state()
+                st.rerun()
 
         error_block = ""
         if health_error:
@@ -1725,6 +2147,8 @@ def render_topbar(current_page: str, health: Optional[dict[str, Any]], health_er
     mode_text = model_display_text(health.get("model_display_name") if health else None)
     date_text = datetime.now().strftime("%Y年%m月%d日")
     subtitle = health_error or meta["subtitle"]
+    user = get_authenticated_user() or {}
+    role_text = "管理员" if user.get("role") == "admin" else "普通用户"
 
     st.markdown(
         f"""
@@ -1739,7 +2163,8 @@ def render_topbar(current_page: str, health: Optional[dict[str, Any]], health_er
             </div>
             <div class="topbar-right">
                 <div class="toolbar-chip">{escape(date_text)}</div>
-                <div class="toolbar-chip">{escape("基座模型：" + mode_text)}</div>
+                <div class="toolbar-chip">{escape(str(user.get("username") or "-") + " · " + role_text)}</div>
+                <div class="toolbar-chip">{escape("推理模型：" + mode_text)}</div>
                 <div class="toolbar-chip {status_class}">{escape(status_text)}</div>
             </div>
         </div>
@@ -1753,7 +2178,7 @@ def build_records_dataframe(items: list[dict[str, Any]]) -> pd.DataFrame:
         return pd.DataFrame()
 
     dataframe = pd.DataFrame(items).copy()
-    for column in ["stock_code", "predicted_label", "source_type", "window_size", "start_date", "end_date", "backend_mode"]:
+    for column in ["stock_code", "predicted_label", "source_type", "window_size", "start_date", "end_date", "inference_model"]:
         if column not in dataframe.columns:
             dataframe[column] = None
 
@@ -1763,7 +2188,7 @@ def build_records_dataframe(items: list[dict[str, Any]]) -> pd.DataFrame:
     dataframe["window_size"] = dataframe["window_size"].fillna("-")
     dataframe["start_date"] = dataframe["start_date"].fillna("-")
     dataframe["end_date"] = dataframe["end_date"].fillna("-")
-    dataframe["backend_mode"] = dataframe["backend_mode"].apply(model_display_text)
+    dataframe["inference_model"] = dataframe["inference_model"].apply(model_display_text)
     dataframe["created_at"] = dataframe["created_at"].apply(format_datetime_text)
 
     dataframe = dataframe.rename(
@@ -1776,13 +2201,13 @@ def build_records_dataframe(items: list[dict[str, Any]]) -> pd.DataFrame:
             "window_size": "窗口大小",
             "start_date": "起始日期",
             "end_date": "结束日期",
-            "backend_mode": "基座模型",
+            "inference_model": "推理模型",
             "created_at": "识别时间",
         }
     )
 
     return dataframe[
-        ["记录ID", "股票代码", "识别类别", "置信度", "来源", "窗口大小", "起始日期", "结束日期", "基座模型", "识别时间"]
+        ["记录ID", "股票代码", "识别类别", "置信度", "来源", "窗口大小", "起始日期", "结束日期", "推理模型", "识别时间"]
     ]
 
 
@@ -1806,7 +2231,7 @@ def render_recent_activity_card(records: list[dict[str, Any]]) -> None:
         items_html.append(
             "<div class='activity-item'>"
             f"<div class='activity-title'>#{int(item['id'])} · {escape(stock_text)} · {escape(str(item['predicted_label']))}</div>"
-            f"<div class='activity-meta'>识别时间：{escape(format_datetime_text(item.get('created_at')))} · 结束日期：{escape(str(item.get('end_date') or '-'))} · 基座模型：{escape(model_display_text(item.get('backend_mode')))}</div>"
+            f"<div class='activity-meta'>识别时间：{escape(format_datetime_text(item.get('created_at')))} · 结束日期：{escape(str(item.get('end_date') or '-'))} · 推理模型：{escape(model_display_text(item.get('inference_model')))}</div>"
             f"<div class='activity-tags'>{tags_html}</div>"
             "</div>"
         )
@@ -1829,7 +2254,7 @@ def render_system_status_card(
 ) -> None:
     status_rows = [
         ("系统状态", "运行正常" if health and health.get("status") == "ok" else "暂未连接"),
-        ("基座模型", model_display_text(health.get("model_display_name") if health else None)),
+        ("推理模型", model_display_text(health.get("model_display_name") if health else None)),
         ("模型服务", "已连接" if health and health.get("remote_api_connected") else "未连接"),
         ("回测就绪记录", f"{ready_backtests} 条"),
     ]
@@ -1914,7 +2339,7 @@ def render_history_records_table(records: list[dict[str, Any]]) -> None:
             f"<td>{escape(str(item.get('start_date') or '-'))}</td>"
             f"<td>{escape(str(item.get('end_date') or '-'))}</td>"
             f"<td><span class='window-badge'>{escape(window_text)}</span></td>"
-            f"<td>{escape(model_display_text(item.get('backend_mode')))}</td>"
+            f"<td>{escape(model_display_text(item.get('inference_model')))}</td>"
             f"<td><span class='history-time-text'>{escape(format_datetime_text(item.get('created_at')))}</span></td>"
             "</tr>"
         )
@@ -1925,7 +2350,7 @@ def render_history_records_table(records: list[dict[str, Any]]) -> None:
         + "<div class='record-table-wrap'>"
         + "<div class='record-table-scroll' style='max-height: 420px;'>"
         + "<table class='record-table'>"
-        + "<thead><tr><th>记录ID</th><th>股票代码</th><th>识别类别</th><th>来源</th><th>置信度</th><th>开始日期</th><th>结束日期</th><th>窗口大小</th><th>基座模型</th><th>识别时间</th></tr></thead>"
+        + "<thead><tr><th>记录ID</th><th>股票代码</th><th>识别类别</th><th>来源</th><th>置信度</th><th>开始日期</th><th>结束日期</th><th>窗口大小</th><th>推理模型</th><th>识别时间</th></tr></thead>"
         + "<tbody>"
         + "".join(row_html)
         + "</tbody></table></div></div></div>"
@@ -1946,7 +2371,7 @@ def render_prediction_result_card(
     tags = [
         f"记录ID #{record['id']}",
         f"来源：{source_type_label(record.get('source_type'))}",
-        f"基座模型：{model_display_text(prediction.get('backend_mode'))}",
+        f"推理模型：{model_display_text(prediction.get('inference_model'))}",
     ]
     if record.get("stock_code"):
         tags.append(f"股票代码：{record['stock_code']}")
@@ -2021,8 +2446,8 @@ def render_record_detail_card(detail: dict[str, Any]) -> None:
                     <div class="value">{escape(str(detail.get('window_size') or '-'))}</div>
                 </div>
                 <div class="info-item">
-                    <div class="label">基座模型</div>
-                    <div class="value">{escape(model_display_text(detail.get('backend_mode')))}</div>
+                    <div class="label">推理模型</div>
+                    <div class="value">{escape(model_display_text(detail.get('inference_model')))}</div>
                 </div>
                 <div class="info-item">
                     <div class="label">识别时间</div>

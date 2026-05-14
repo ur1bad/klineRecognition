@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
+from backend.auth import get_current_user
 from backend.schemas import DeleteRecordResponseSchema, RecognitionRecordSchema, RecordsListResponseSchema
 from backend.services.record_service import RecordService
 
@@ -19,8 +20,10 @@ async def list_records(
     offset: int = Query(0, ge=0),
     stock_code: Optional[str] = Query(default=None),
     predicted_label: Optional[str] = Query(default=None),
+    current_user: dict = Depends(get_current_user),
 ) -> RecordsListResponseSchema:
     result = record_service.list_records(
+        user_id=int(current_user["id"]),
         limit=limit,
         offset=offset,
         stock_code=stock_code,
@@ -32,8 +35,12 @@ async def list_records(
 
 
 @router.get("/record/{record_id}", response_model=RecognitionRecordSchema)
-async def get_record(request: Request, record_id: int) -> RecognitionRecordSchema:
-    record = record_service.get_record(record_id)
+async def get_record(
+    request: Request,
+    record_id: int,
+    current_user: dict = Depends(get_current_user),
+) -> RecognitionRecordSchema:
+    record = record_service.get_record(record_id, user_id=int(current_user["id"]))
     if record is None:
         raise HTTPException(status_code=404, detail=f"记录 {record_id} 不存在。")
     record = record_service.attach_image_url(record, str(request.base_url).rstrip("/"))
@@ -41,8 +48,11 @@ async def get_record(request: Request, record_id: int) -> RecognitionRecordSchem
 
 
 @router.delete("/record/{record_id}", response_model=DeleteRecordResponseSchema)
-async def delete_record(record_id: int) -> DeleteRecordResponseSchema:
-    result = record_service.delete_record(record_id)
+async def delete_record(
+    record_id: int,
+    current_user: dict = Depends(get_current_user),
+) -> DeleteRecordResponseSchema:
+    result = record_service.delete_record(record_id, user_id=int(current_user["id"]))
     if result is None:
         raise HTTPException(status_code=404, detail=f"记录 {record_id} 不存在。")
     return DeleteRecordResponseSchema(**result)

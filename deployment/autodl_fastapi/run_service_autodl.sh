@@ -9,7 +9,7 @@ LOG_FILE="/root/autodl-tmp/kline_fastapi.out"
 
 HOST="0.0.0.0"
 PORT="6006"
-MODEL_NAME="Qwen2.5-VL-7B-Instruct"
+MODEL_NAME="Qwen2.5-VL-7B-Instruct + LoRA"
 DEVICE="auto"
 TORCH_DTYPE="auto"
 ATTN_IMPLEMENTATION="sdpa"

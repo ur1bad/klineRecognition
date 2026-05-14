@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from html import escape
 from typing import Any, Optional
+from urllib.parse import urlencode
 
 import pandas as pd
 import streamlit as st
@@ -9,6 +10,7 @@ import streamlit as st
 from frontend.shared import (
     api_get,
     build_panel_header,
+    get_auth_session_id,
     render_page_banner,
     render_placeholder,
     render_stat_card,
@@ -279,6 +281,15 @@ def _inject_market_css() -> None:
             color: #152c4a;
             font-weight: 750;
         }
+        .market-stock-link {
+            color: #1f5f96 !important;
+            font-weight: 850;
+            text-decoration: none !important;
+        }
+        .market-stock-link:hover {
+            color: #d84c3f !important;
+            text-decoration: underline !important;
+        }
         .market-table-number {
             font-variant-numeric: tabular-nums;
             white-space: nowrap;
@@ -387,12 +398,21 @@ def _inject_market_css() -> None:
             padding-right: 0.68rem !important;
             align-items: center !important;
         }
-        .st-key-market-filter-panel .stTextInput div[data-baseweb="input"] > div {
-            min-height: 40px !important;
-            border: 1px solid #d5e2f1 !important;
+        .st-key-market-filter-panel .stTextInput div[data-baseweb="input"] {
+            min-height: 46px !important;
+            border: 1px solid rgba(197, 214, 234, 0.92) !important;
             border-radius: 14px !important;
-            background: #f8fbff !important;
+            background: rgba(239, 246, 252, 0.92) !important;
             color: #152c4a !important;
+            box-shadow: none !important;
+            box-sizing: border-box !important;
+            overflow: hidden !important;
+        }
+        .st-key-market-filter-panel .stTextInput div[data-baseweb="input"] > div {
+            min-height: 46px !important;
+            border: 0 !important;
+            border-radius: 14px !important;
+            background: transparent !important;
             box-shadow: none !important;
             padding-right: 0.85rem !important;
             box-sizing: border-box !important;
@@ -408,18 +428,20 @@ def _inject_market_css() -> None:
             padding-right: 1rem !important;
             background: transparent !important;
             box-sizing: border-box !important;
+            font-size: 0.95rem !important;
         }
         .st-key-market-filter-panel .stTextInput input::placeholder {
-            color: #7f91a7 !important;
+            color: #90a0b6 !important;
             opacity: 1 !important;
         }
         .st-key-market-filter-panel div[data-baseweb="select"] > div:focus-within {
             border-color: #2d67b7 !important;
             box-shadow: 0 0 0 3px rgba(45, 103, 183, 0.16) !important;
         }
+        .st-key-market-filter-panel .stTextInput div[data-baseweb="input"]:focus-within,
         .st-key-market-filter-panel .stTextInput div[data-baseweb="input"] > div:focus-within {
-            border-color: #8eb2e0 !important;
-            box-shadow: 0 0 0 3px rgba(45, 103, 183, 0.10) !important;
+            border-color: rgba(197, 214, 234, 0.92) !important;
+            box-shadow: none !important;
         }
         @media (max-width: 900px) {
             .market-source-strip {
@@ -711,11 +733,13 @@ def _build_market_table_html(dataframe: pd.DataFrame, *, start_index: int = 0) -
     for row_number, (_, row) in enumerate(dataframe.iterrows(), start=start_index + 1):
         change_value = row.get("涨跌幅(%)")
         change_class = _signed_class(change_value)
+        stock_code = str(row.get("代码") or "")
+        detail_href = escape(_stock_detail_href(stock_code), quote=True)
         rows.append(
             "<tr>"
             f"<td><span class='market-table-number'>{row_number}</span></td>"
-            f"<td><span class='record-id'>{escape(str(row.get('代码') or '-'))}</span></td>"
-            f"<td><span class='market-table-name'>{escape(str(row.get('名称') or '-'))}</span></td>"
+            f"<td><a class='market-stock-link record-id' href='{detail_href}'>{escape(stock_code or '-')}</a></td>"
+            f"<td><a class='market-stock-link market-table-name' href='{detail_href}'>{escape(str(row.get('名称') or '-'))}</a></td>"
             f"<td><span class='record-badge'>{escape(str(row.get('板块') or '-'))}</span></td>"
             f"<td><span class='market-table-number'>{escape(_format_number(row.get('最新价')))}</span></td>"
             f"<td><span class='market-table-number {change_class}'>{escape(_format_signed(change_value, suffix='%'))}</span></td>"
@@ -739,6 +763,17 @@ def _build_market_table_html(dataframe: pd.DataFrame, *, start_index: int = 0) -
         f"<tbody>{body_html}</tbody>"
         "</table></div></div></div>"
     )
+
+
+def _stock_detail_href(stock_code: str) -> str:
+    params = {
+        "page": "stock_detail",
+        "stock_code": stock_code,
+    }
+    auth_session_id = get_auth_session_id()
+    if auth_session_id:
+        params["auth_sid"] = auth_session_id
+    return "?" + urlencode(params)
 
 
 def _build_stock_dataframe(stocks: list[dict[str, Any]]) -> pd.DataFrame:

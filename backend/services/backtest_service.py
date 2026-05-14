@@ -24,8 +24,15 @@ class BacktestService:
         self.chart_service = chart_service or KlineChartService()
         self.record_service = record_service or RecordService()
 
-    def run_for_record(self, record_id: int, horizon_days: int = 3, adjust: str = "qfq") -> dict[str, Any]:
-        record = self.record_service.get_record(record_id)
+    def run_for_record(
+        self,
+        record_id: int,
+        *,
+        user_id: int,
+        horizon_days: int = 3,
+        adjust: str = "qfq",
+    ) -> dict[str, Any]:
+        record = self.record_service.get_record(record_id, user_id=user_id)
         if record is None:
             raise ValueError(f"记录 {record_id} 不存在。")
         if not self.record_service.is_backtest_ready(record):
@@ -102,7 +109,7 @@ class BacktestService:
                 "future_return": round(future_return, 6),
                 "future_direction": "上涨" if future_return > 0 else "下跌" if future_return < 0 else "横盘",
                 "is_success": is_success,
-                "backend_mode": str(record.get("backend_mode") or ""),
+                "inference_model": str(record.get("inference_model") or ""),
                 "note": "以识别窗口结束日后的未来交易日表现，直接验证本次识别信号是否有效。",
             },
             "window_prices": window_prices,

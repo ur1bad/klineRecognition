@@ -4,8 +4,9 @@ from pathlib import Path
 from typing import Any, Optional
 from uuid import uuid4
 
-from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 
+from backend.auth import get_current_user
 from backend.schemas import (
     GenerateAndPredictRequest,
     GenerateContextSchema,
@@ -32,7 +33,7 @@ def _prediction_schema(result: Any) -> PredictionResultSchema:
         confidence=result.confidence,
         reason=result.reason,
         raw_output=result.raw_output,
-        backend_mode=record_service._normalize_backend_mode(result.backend_mode),
+        inference_model=record_service.normalize_inference_model(result.inference_model),
     )
 
 
@@ -70,6 +71,7 @@ async def predict_image(
     start_date: Optional[str] = Form(default=None),
     end_date: Optional[str] = Form(default=None),
     window_size: Optional[int] = Form(default=None),
+    current_user: dict = Depends(get_current_user),
 ) -> PredictResponseSchema:
     normalized_start_date = _normalize_optional_date(start_date, "开始日期")
     normalized_end_date = _normalize_optional_date(end_date, "结束日期")
@@ -81,11 +83,12 @@ async def predict_image(
     try:
         prediction = inference_service.predict(image_path=image_path)
     except ModelUnavailableError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        raise HTTPException(status_code=503, detail=f"模型不可用：{exc}") from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"图片识别失败：{exc}") from exc
 
     record = record_service.create_record(
+        user_id=int(current_user["id"]),
         stock_code=stock_code,
         image_path=image_path,
         predicted_label=prediction.label,
@@ -95,7 +98,7 @@ async def predict_image(
         window_size=window_size,
         start_date=normalized_start_date,
         end_date=normalized_end_date,
-        backend_mode=prediction.backend_mode,
+        inference_model=prediction.inference_model,
     )
     record = record_service.attach_image_url(record, str(request.base_url).rstrip("/"))
 
@@ -109,6 +112,7 @@ async def predict_image(
 async def generate_and_predict(
     request: Request,
     payload: GenerateAndPredictRequest,
+    current_user: dict = Depends(get_current_user),
 ) -> GeneratePredictResponseSchema:
     try:
         normalized_start_date = _normalize_required_date(payload.start_date, "开始日期")
@@ -126,12 +130,15 @@ async def generate_and_predict(
             image_path=generation.image_path,
             ohlc_df=generation.window_df,
         )
+    except ModelUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=f"模型不可用：{exc}") from exc
     except HTTPException:
         raise
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     record = record_service.create_record(
+        user_id=int(current_user["id"]),
         stock_code=payload.stock_code,
         image_path=generation.image_path,
         predicted_label=prediction.label,
@@ -141,7 +148,7 @@ async def generate_and_predict(
         window_size=payload.window_size,
         start_date=normalized_start_date,
         end_date=normalized_end_date,
-        backend_mode=prediction.backend_mode,
+        inference_model=prediction.inference_model,
     )
     base_url = str(request.base_url).rstrip("/")
     record = record_service.attach_image_url(record, base_url)

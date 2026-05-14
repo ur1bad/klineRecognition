@@ -4,7 +4,7 @@ import contextlib
 import io
 import math
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Optional
 
 import akshare as ak
@@ -12,6 +12,7 @@ import pandas as pd
 
 
 CACHE_TTL_SECONDS = 15 * 60
+DETAIL_HISTORY_DAYS = 520
 SOURCE_NAME = "AkShare 东方财富实时行情"
 INDEX_CODES = ["000001", "399001", "399006", "000688"]
 
@@ -22,6 +23,7 @@ class MarketService:
     def __init__(self) -> None:
         self._cache_payload: Optional[dict[str, Any]] = None
         self._cache_created_at = 0.0
+        self._history_cache: dict[tuple[str, str, int], dict[str, Any]] = {}
 
     def get_overview(self, *, force_refresh: bool = False) -> dict[str, Any]:
         if not force_refresh and self._cache_payload and self._is_cache_fresh():
@@ -70,8 +72,161 @@ class MarketService:
         self._cache_created_at = time.time()
         return payload
 
+    def get_stock_detail(
+        self,
+        stock_code: str,
+        *,
+        force_refresh: bool = False,
+        history_days: int = DETAIL_HISTORY_DAYS,
+        adjust: str = "qfq",
+    ) -> dict[str, Any]:
+        code = self._normalize_stock_code(stock_code)
+        history_days = DETAIL_HISTORY_DAYS
+        overview = self.get_overview(force_refresh=force_refresh)
+        stock = next((item for item in overview.get("stocks", []) if item.get("code") == code), None)
+        if stock is None:
+            stock = self._build_minimal_stock_row(code)
+
+        try:
+            history, history_source = self._get_history_rows_with_cache(
+                code,
+                history_days=history_days,
+                adjust=adjust,
+                force_refresh=force_refresh,
+            )
+        except Exception as exc:
+            history = self._build_fallback_history_rows(stock, history_days=history_days)
+            history_source = f"示例走势（历史行情源不可用：{type(exc).__name__}）"
+            self._store_history_cache(code, adjust, history_days, history, history_source)
+
+        stock = self._enrich_stock_detail_metrics(stock, history)
+        history = self._align_latest_history_with_spot(stock, history)
+
+        try:
+            minute, minute_source = self._fetch_minute_rows(code)
+        except Exception as exc:
+            minute = self._build_fallback_minute_rows(stock)
+            minute_source = f"示例分时（分钟行情源不可用：{type(exc).__name__}）"
+
+        return {
+            "updated_at": overview.get("updated_at") or datetime.now().isoformat(timespec="seconds"),
+            "source": overview.get("source") or SOURCE_NAME,
+            "history_source": history_source,
+            "minute_source": minute_source,
+            "stock": stock,
+            "history": history,
+            "minute": minute,
+        }
+
     def _is_cache_fresh(self) -> bool:
         return (time.time() - self._cache_created_at) <= CACHE_TTL_SECONDS
+
+    def _enrich_stock_detail_metrics(self, stock: dict[str, Any], history: list[dict[str, Any]]) -> dict[str, Any]:
+        enriched = dict(stock)
+        spot_volume = enriched.get("volume")
+        spot_amount = enriched.get("amount")
+        spot_price = enriched.get("latest_price")
+        latest_history = self._latest_history_row(history)
+        if latest_history:
+            fallback_pairs = [
+                ("latest_price", "close"),
+                ("change_percent", "change_percent"),
+                ("volume", "volume"),
+                ("amount", "amount"),
+            ]
+            for stock_field, history_field in fallback_pairs:
+                if self._is_missing(enriched.get(stock_field)) and not self._is_missing(latest_history.get(history_field)):
+                    enriched[stock_field] = latest_history.get(history_field)
+
+        if self._is_missing(enriched.get("turnover_rate")):
+            turnover_rate = self._resolve_detail_turnover_rate(
+                history,
+                current_volume=spot_volume,
+                current_amount=spot_amount,
+                current_price=spot_price,
+            )
+            if turnover_rate is not None:
+                enriched["turnover_rate"] = turnover_rate
+        return enriched
+
+    def _latest_history_row(self, history: list[dict[str, Any]]) -> Optional[dict[str, Any]]:
+        if not history:
+            return None
+        return max(history, key=lambda row: str(row.get("trade_date") or ""))
+
+    def _resolve_detail_turnover_rate(
+        self,
+        history: list[dict[str, Any]],
+        *,
+        current_volume: Any,
+        current_amount: Any,
+        current_price: Any,
+    ) -> Optional[float]:
+        latest = self._latest_history_row(history)
+        if latest and str(latest.get("trade_date") or "") == datetime.now().date().isoformat():
+            latest_turnover = self._safe_float(latest.get("turnover_rate"))
+            if latest_turnover is not None:
+                return latest_turnover
+        return self._estimate_current_turnover_rate(
+            history,
+            current_volume=current_volume,
+            current_amount=current_amount,
+            current_price=current_price,
+        )
+
+    def _estimate_current_turnover_rate(
+        self,
+        history: list[dict[str, Any]],
+        *,
+        current_volume: Any,
+        current_amount: Any,
+        current_price: Any,
+    ) -> Optional[float]:
+        current_volume_shares = self._volume_as_shares(current_volume, current_amount, current_price)
+        if current_volume_shares is None or current_volume_shares <= 0:
+            return None
+
+        history_rows = sorted(history, key=lambda row: str(row.get("trade_date") or ""), reverse=True)
+        for row in history_rows:
+            history_turnover = self._safe_float(row.get("turnover_rate"))
+            history_volume_shares = self._volume_as_shares(row.get("volume"), row.get("amount"), row.get("close"))
+            if history_turnover is None or history_turnover <= 0 or history_volume_shares is None or history_volume_shares <= 0:
+                continue
+            float_shares = history_volume_shares / (history_turnover / 100.0)
+            if float_shares > 0:
+                return round((current_volume_shares / float_shares) * 100.0, 4)
+        return None
+
+    def _volume_as_shares(self, volume: Any, amount: Any, price: Any) -> Optional[float]:
+        volume_number = self._safe_float(volume)
+        amount_number = self._safe_float(amount)
+        price_number = self._safe_float(price)
+        if amount_number is not None and price_number is not None and price_number > 0:
+            implied_shares = amount_number / price_number
+            if implied_shares > 0:
+                if volume_number is None or volume_number <= 0:
+                    return implied_shares
+                if 0.5 <= volume_number / implied_shares <= 2.0:
+                    return volume_number
+                if 0.5 <= (volume_number * 100.0) / implied_shares <= 2.0:
+                    return volume_number * 100.0
+                return implied_shares
+        return volume_number
+
+    def _align_latest_history_with_spot(self, stock: dict[str, Any], history: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        if not history or self._is_missing(stock.get("change_percent")):
+            return history
+
+        latest = self._latest_history_row(history)
+        if not latest or str(latest.get("trade_date") or "") != datetime.now().date().isoformat():
+            return history
+
+        aligned = self._copy_rows(history)
+        for row in aligned:
+            if row.get("trade_date") == latest.get("trade_date"):
+                row["change_percent"] = stock.get("change_percent")
+                break
+        return aligned
 
     def _try_fetch_stock_spot_with_sources(self) -> tuple[pd.DataFrame, str]:
         fetch_attempts = [
@@ -115,6 +270,242 @@ class MarketService:
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             return fetch_fn()
 
+    def _get_history_rows_with_cache(
+        self,
+        code: str,
+        *,
+        history_days: int,
+        adjust: str,
+        force_refresh: bool,
+    ) -> tuple[list[dict[str, Any]], str]:
+        cache_key = self._history_cache_key(code, adjust, history_days)
+        cached = self._history_cache.get(cache_key)
+        if not force_refresh and cached and self._is_cache_entry_fresh(cached):
+            return self._copy_rows(cached.get("history") or []), str(cached.get("source") or "")
+
+        history, history_source = self._fetch_history_rows(code, history_days=history_days, adjust=adjust)
+        self._store_history_cache(code, adjust, history_days, history, history_source)
+        return history, history_source
+
+    def _store_history_cache(
+        self,
+        code: str,
+        adjust: str,
+        history_days: int,
+        history: list[dict[str, Any]],
+        source: str,
+    ) -> None:
+        cache_key = self._history_cache_key(code, adjust, history_days)
+        self._history_cache[cache_key] = {
+            "created_at": time.time(),
+            "source": source,
+            "history": self._copy_rows(history),
+        }
+
+    def _history_cache_key(self, code: str, adjust: str, history_days: int) -> tuple[str, str, int]:
+        return (self._normalize_stock_code(code), str(adjust or ""), int(history_days))
+
+    def _is_cache_entry_fresh(self, cache_entry: dict[str, Any]) -> bool:
+        try:
+            created_at = float(cache_entry.get("created_at") or 0.0)
+        except Exception:
+            return False
+        return (time.time() - created_at) <= CACHE_TTL_SECONDS
+
+    def _copy_rows(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return [dict(row) for row in rows]
+
+    def _fetch_history_rows(self, code: str, *, history_days: int, adjust: str) -> tuple[list[dict[str, Any]], str]:
+        end_date = datetime.now().strftime("%Y%m%d")
+        start_date = (datetime.now() - timedelta(days=max(90, int(history_days) * 2))).strftime("%Y%m%d")
+        prefixed_code = self._minute_fetch_symbol(code)
+        attempts = [
+            (
+                "东方财富日线行情",
+                lambda: ak.stock_zh_a_hist(
+                    symbol=code,
+                    start_date=start_date,
+                    end_date=end_date,
+                    adjust=adjust,
+                ),
+            ),
+            (
+                "新浪日线行情",
+                lambda: ak.stock_zh_a_daily(
+                    symbol=prefixed_code,
+                    start_date=start_date,
+                    end_date=end_date,
+                    adjust=adjust,
+                ),
+            ),
+            (
+                "腾讯日线行情",
+                lambda: ak.stock_zh_a_hist_tx(
+                    symbol=prefixed_code,
+                    start_date=start_date,
+                    end_date=end_date,
+                    adjust=adjust,
+                ),
+            ),
+        ]
+
+        last_error: Optional[Exception] = None
+        for source_name, fetch_fn in attempts:
+            try:
+                dataframe = self._call_data_source(fetch_fn)
+                rows = self._build_history_rows(dataframe, limit=history_days)
+                if rows:
+                    return rows, source_name
+                last_error = ValueError(f"{source_name} 返回空行情。")
+            except Exception as exc:
+                last_error = exc
+
+        if last_error is not None:
+            raise last_error
+        raise ValueError("历史行情为空。")
+
+    def _build_history_rows(self, dataframe: pd.DataFrame, *, limit: int) -> list[dict[str, Any]]:
+        if dataframe is None or dataframe.empty:
+            return []
+
+        rows: list[dict[str, Any]] = []
+        data = dataframe.tail(max(1, int(limit))).copy()
+        for _, item in data.iterrows():
+            trade_date = pd.to_datetime(self._first_existing_value(item, ["日期", "date", "Date", "day", "trade_date"]), errors="coerce")
+            if pd.isna(trade_date):
+                continue
+            close = self._safe_float(self._first_existing_value(item, ["收盘", "close", "Close"]))
+            volume = self._safe_float(self._first_existing_value(item, ["成交量", "volume", "Volume", "vol"]))
+            amount = self._safe_float(self._first_existing_value(item, ["成交额", "amount", "Amount"]))
+            if volume is None:
+                volume = amount
+                amount = round(volume * close, 2) if volume is not None and close is not None else None
+            rows.append(
+                {
+                    "trade_date": trade_date.strftime("%Y-%m-%d"),
+                    "open": self._safe_float(self._first_existing_value(item, ["开盘", "open", "Open"])),
+                    "high": self._safe_float(self._first_existing_value(item, ["最高", "high", "High"])),
+                    "low": self._safe_float(self._first_existing_value(item, ["最低", "low", "Low"])),
+                    "close": close,
+                    "volume": volume,
+                    "amount": amount,
+                    "change_percent": self._safe_float(self._first_existing_value(item, ["涨跌幅", "change_percent", "pct_chg"])),
+                    "turnover_rate": self._extract_history_turnover_rate(item),
+                }
+            )
+        return self._fill_history_derived_fields(rows)
+
+    def _fill_history_derived_fields(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        rows = sorted(rows, key=lambda row: str(row.get("trade_date") or ""))
+        previous_close: Optional[float] = None
+        for row in rows:
+            close = row.get("close")
+            if row.get("change_percent") is None and previous_close and close is not None:
+                row["change_percent"] = round(((float(close) - previous_close) / previous_close) * 100, 4)
+            if row.get("amount") is None and row.get("volume") is not None and close is not None:
+                row["amount"] = round(float(row["volume"]) * float(close), 2)
+            if close is not None:
+                previous_close = float(close)
+        return rows
+
+    def _extract_history_turnover_rate(self, row: pd.Series) -> Optional[float]:
+        rate = self._safe_float(self._first_existing_value(row, ["换手率", "turnover_rate"]))
+        if rate is not None:
+            return rate
+        turnover = self._safe_float(self._first_existing_value(row, ["turnover"]))
+        if turnover is None:
+            return None
+        return round(turnover * 100, 4) if abs(turnover) <= 1 else turnover
+
+    def _fetch_minute_rows(self, code: str) -> tuple[list[dict[str, Any]], str]:
+        end_date = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d 15:30:00")
+        start_date = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d 09:30:00")
+        prefixed_code = self._minute_fetch_symbol(code)
+        attempts = [
+            (
+                "东方财富分钟行情",
+                lambda: ak.stock_zh_a_hist_min_em(
+                    symbol=code,
+                    start_date=start_date,
+                    end_date=end_date,
+                    period="1",
+                    adjust="",
+                ),
+            ),
+            (
+                "新浪分钟行情",
+                lambda: ak.stock_zh_a_minute(symbol=prefixed_code, period="1", adjust=""),
+            ),
+        ]
+
+        last_error: Optional[Exception] = None
+        for source_name, fetch_fn in attempts:
+            try:
+                dataframe = self._call_data_source(fetch_fn)
+                rows = self._build_minute_rows(dataframe, limit=260)
+                if rows:
+                    return rows, source_name
+            except Exception as exc:
+                last_error = exc
+
+        if last_error is not None:
+            raise last_error
+        raise ValueError("分钟行情为空。")
+
+    def _build_minute_rows(self, dataframe: pd.DataFrame, *, limit: int) -> list[dict[str, Any]]:
+        if dataframe is None or dataframe.empty:
+            return []
+
+        data = dataframe.copy()
+        time_column = self._first_existing_column(data, ["时间", "日期时间", "day", "datetime", "日期"])
+        if not time_column:
+            return []
+
+        data["_trade_time"] = pd.to_datetime(data[time_column], errors="coerce")
+        data = data.dropna(subset=["_trade_time"]).sort_values("_trade_time")
+        if data.empty:
+            return []
+
+        latest_day = data["_trade_time"].dt.date.max()
+        data = data[data["_trade_time"].dt.date == latest_day].tail(max(1, int(limit)))
+
+        rows: list[dict[str, Any]] = []
+        for _, item in data.iterrows():
+            price = self._safe_float(self._first_existing_value(item, ["收盘", "close", "最新价", "price"]))
+            if price is None:
+                continue
+            trade_time = item["_trade_time"]
+            rows.append(
+                {
+                    "trade_time": trade_time.strftime("%Y-%m-%d %H:%M:%S"),
+                    "price": price,
+                    "volume": self._safe_float(self._first_existing_value(item, ["成交量", "volume", "vol"])),
+                    "amount": self._safe_float(self._first_existing_value(item, ["成交额", "amount"])),
+                    "average_price": self._safe_float(self._first_existing_value(item, ["均价", "average_price", "avg_price"])),
+                }
+            )
+        return rows
+
+    def _first_existing_column(self, dataframe: pd.DataFrame, candidates: list[str]) -> Optional[str]:
+        for column in candidates:
+            if column in dataframe.columns:
+                return column
+        return None
+
+    def _first_existing_value(self, row: pd.Series, candidates: list[str]) -> Any:
+        for column in candidates:
+            if column not in row:
+                continue
+            value = row.get(column)
+            if value is not None and not pd.isna(value):
+                return value
+        return None
+
+    def _minute_fetch_symbol(self, code: str) -> str:
+        if code.startswith(("6", "9")):
+            return f"sh{code}"
+        return f"sz{code}"
+
     def _build_index_rows(self, index_df: pd.DataFrame) -> list[dict[str, Any]]:
         if index_df is None or index_df.empty:
             return []
@@ -149,6 +540,9 @@ class MarketService:
                 continue
 
             board = self._resolve_board(code)
+            amplitude = self._safe_float(item.get("振幅"))
+            if amplitude is None:
+                amplitude = self._calculate_spot_amplitude(item)
             rows.append(
                 {
                     "code": code,
@@ -157,7 +551,7 @@ class MarketService:
                     "change_percent": self._safe_float(item.get("涨跌幅")),
                     "change_amount": self._safe_float(item.get("涨跌额")),
                     "turnover_rate": self._safe_float(item.get("换手率")),
-                    "amplitude": self._safe_float(item.get("振幅")),
+                    "amplitude": amplitude,
                     "volume": self._safe_float(item.get("成交量")),
                     "amount": self._safe_float(item.get("成交额")),
                     "pe_dynamic": self._safe_float(item.get("市盈率-动态")),
@@ -169,7 +563,7 @@ class MarketService:
 
     def _normalize_stock_code(self, value: Any) -> str:
         text = str(value or "").strip()
-        if text.startswith(("sh", "sz", "bj")):
+        if text.lower().startswith(("sh", "sz", "bj")):
             return text[2:]
         return text
 
@@ -355,6 +749,22 @@ class MarketService:
             return None
         return round(number, 4)
 
+    def _calculate_spot_amplitude(self, row: pd.Series) -> Optional[float]:
+        high = self._safe_float(self._first_existing_value(row, ["最高", "high", "High"]))
+        low = self._safe_float(self._first_existing_value(row, ["最低", "low", "Low"]))
+        previous_close = self._safe_float(self._first_existing_value(row, ["昨收", "昨收价", "pre_close", "previous_close"]))
+        if high is None or low is None or previous_close is None or previous_close <= 0:
+            return None
+        return round(((high - low) / previous_close) * 100, 4)
+
+    def _is_missing(self, value: Any) -> bool:
+        try:
+            if value is None or pd.isna(value):
+                return True
+        except Exception:
+            return value is None
+        return str(value).strip() in {"", "-", "--"}
+
     def _calculate_index_change(self, indices: list[dict[str, Any]]) -> Optional[float]:
         weighted_indices = {
             "000001": 0.35,
@@ -400,6 +810,94 @@ class MarketService:
         if code.startswith(("4", "8", "920")):
             return "北交所"
         return "其他"
+
+    def _build_minimal_stock_row(self, code: str) -> dict[str, Any]:
+        return {
+            "code": code,
+            "name": code,
+            "latest_price": None,
+            "change_percent": None,
+            "change_amount": None,
+            "turnover_rate": None,
+            "amplitude": None,
+            "volume": None,
+            "amount": None,
+            "pe_dynamic": None,
+            "market": self._resolve_market(code),
+            "board": self._resolve_board(code),
+        }
+
+    def _build_fallback_history_rows(self, stock: dict[str, Any], *, history_days: int) -> list[dict[str, Any]]:
+        base_price = float(stock.get("latest_price") or 10.0)
+        change_percent = float(stock.get("change_percent") or 0.0)
+        day = datetime.now().date()
+        trade_days = []
+        while len(trade_days) < max(20, int(history_days)):
+            if day.weekday() < 5:
+                trade_days.append(day)
+            day -= timedelta(days=1)
+        trade_days.reverse()
+
+        rows: list[dict[str, Any]] = []
+        total = max(len(trade_days), 1)
+        seed = sum(ord(char) for char in str(stock.get("code") or ""))
+        for index, trade_day in enumerate(trade_days):
+            wave = math.sin((index + seed % 17) / 4.0) * 0.018 + math.cos((index + seed % 11) / 7.0) * 0.010
+            drift = ((index + 1) / total - 1.0) * (change_percent / 100.0) * 0.35
+            close = max(0.01, base_price * (1.0 + wave + drift))
+            open_price = close * (1.0 - math.sin((index + 3) / 5.0) * 0.006)
+            high = max(open_price, close) * 1.012
+            low = min(open_price, close) * 0.988
+            volume = float(400000 + (index + 1) * 9000 + (seed % 97) * 1000)
+            rows.append(
+                {
+                    "trade_date": trade_day.strftime("%Y-%m-%d"),
+                    "open": round(open_price, 2),
+                    "high": round(high, 2),
+                    "low": round(low, 2),
+                    "close": round(close, 2),
+                    "volume": round(volume, 2),
+                    "amount": round(volume * close, 2),
+                    "change_percent": None,
+                    "turnover_rate": None,
+                }
+            )
+        return rows
+
+    def _build_fallback_minute_rows(self, stock: dict[str, Any]) -> list[dict[str, Any]]:
+        base_price = float(stock.get("latest_price") or 10.0)
+        change_percent = float(stock.get("change_percent") or 0.0)
+        trade_day = datetime.now().date()
+        while trade_day.weekday() >= 5:
+            trade_day -= timedelta(days=1)
+
+        minute_points: list[datetime] = []
+        for start_hour, start_minute, end_hour, end_minute in [(9, 30, 11, 30), (13, 0, 15, 0)]:
+            current = datetime.combine(trade_day, datetime.min.time()).replace(hour=start_hour, minute=start_minute)
+            end = datetime.combine(trade_day, datetime.min.time()).replace(hour=end_hour, minute=end_minute)
+            while current <= end:
+                minute_points.append(current)
+                current += timedelta(minutes=1)
+
+        rows: list[dict[str, Any]] = []
+        seed = sum(ord(char) for char in str(stock.get("code") or ""))
+        total = max(len(minute_points), 1)
+        for index, trade_time in enumerate(minute_points):
+            progress = index / total
+            wave = math.sin((index + seed % 13) / 13.0) * 0.008 + math.cos((index + seed % 7) / 19.0) * 0.006
+            drift = (progress - 0.5) * (change_percent / 100.0) * 0.35
+            price = max(0.01, base_price * (1.0 + wave + drift))
+            volume = 1500 + (seed % 97) * 12 + abs(math.sin(index / 9.0)) * 6200
+            rows.append(
+                {
+                    "trade_time": trade_time.strftime("%Y-%m-%d %H:%M:%S"),
+                    "price": round(price, 2),
+                    "volume": round(volume, 2),
+                    "amount": round(volume * price, 2),
+                    "average_price": round(base_price * (1.0 + drift * 0.35), 2),
+                }
+            )
+        return rows
 
     def _build_fallback_index_rows(self) -> list[dict[str, Any]]:
         return [

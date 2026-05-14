@@ -10,11 +10,12 @@ class PredictionResultSchema(BaseModel):
     confidence: float = Field(..., ge=0.0, le=1.0)
     reason: str
     raw_output: Optional[str] = None
-    backend_mode: str
+    inference_model: str
 
 
 class RecognitionRecordSchema(BaseModel):
     id: int
+    user_id: int
     stock_code: Optional[str] = None
     image_path: str
     image_url: Optional[str] = None
@@ -25,7 +26,7 @@ class RecognitionRecordSchema(BaseModel):
     window_size: Optional[int] = None
     start_date: Optional[str] = None
     end_date: Optional[str] = None
-    backend_mode: Optional[str] = None
+    inference_model: Optional[str] = None
     created_at: str
 
 
@@ -103,6 +104,66 @@ class DeleteRecordResponseSchema(BaseModel):
     image_deleted: bool = False
 
 
+class UserSchema(BaseModel):
+    id: int
+    username: str
+    role: str
+    is_active: bool
+    created_at: str
+    updated_at: Optional[str] = None
+    last_login_at: Optional[str] = None
+    record_count: int = 0
+
+
+class RegisterRequest(BaseModel):
+    username: str = Field(..., min_length=3, max_length=32)
+    password: str = Field(..., min_length=6, max_length=128)
+
+
+class LoginRequest(BaseModel):
+    username: str = Field(..., min_length=1)
+    password: str = Field(..., min_length=1)
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str = Field(..., min_length=1, max_length=128)
+    new_password: str = Field(..., min_length=6, max_length=128)
+
+
+class AuthResponseSchema(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    user: UserSchema
+
+
+class UsersListResponseSchema(BaseModel):
+    total: int
+    items: list[UserSchema]
+
+
+class AdminCreateUserRequest(BaseModel):
+    username: str = Field(..., min_length=3, max_length=32)
+    password: str = Field(..., min_length=6, max_length=128)
+    role: str = Field("user")
+    is_active: bool = True
+
+
+class AdminUpdateUserRequest(BaseModel):
+    role: Optional[str] = None
+    is_active: Optional[bool] = None
+
+
+class AdminResetPasswordRequest(BaseModel):
+    password: str = Field(..., min_length=6, max_length=128)
+
+
+class AdminDeleteUserResponse(BaseModel):
+    user_id: int
+    deleted: bool
+    records_deleted: int = 0
+    images_deleted: int = 0
+
+
 class BacktestRequest(BaseModel):
     record_id: int = Field(..., ge=1)
     horizon_days: int = Field(3, ge=1, le=30)
@@ -133,7 +194,7 @@ class BacktestSummarySchema(BaseModel):
     future_return: float
     future_direction: str
     is_success: Optional[bool] = None
-    backend_mode: str
+    inference_model: str
     note: str
 
 
@@ -195,6 +256,36 @@ class MarketStockSchema(BaseModel):
     pe_dynamic: Optional[float] = None
     market: str
     board: str
+
+
+class MarketHistoryPointSchema(BaseModel):
+    trade_date: str
+    open: Optional[float] = None
+    high: Optional[float] = None
+    low: Optional[float] = None
+    close: Optional[float] = None
+    volume: Optional[float] = None
+    amount: Optional[float] = None
+    change_percent: Optional[float] = None
+    turnover_rate: Optional[float] = None
+
+
+class MarketMinutePointSchema(BaseModel):
+    trade_time: str
+    price: Optional[float] = None
+    volume: Optional[float] = None
+    amount: Optional[float] = None
+    average_price: Optional[float] = None
+
+
+class MarketStockDetailSchema(BaseModel):
+    updated_at: str
+    source: str
+    history_source: str
+    minute_source: str = ""
+    stock: MarketStockSchema
+    history: list[MarketHistoryPointSchema] = Field(default_factory=list)
+    minute: list[MarketMinutePointSchema] = Field(default_factory=list)
 
 
 class MarketOverviewSchema(BaseModel):
