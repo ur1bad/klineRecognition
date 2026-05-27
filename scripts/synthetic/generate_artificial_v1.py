@@ -20,6 +20,8 @@ if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from kline_core.labeling import (
+    check_ascending_triangle,
+    check_descending_triangle,
     check_double_bottom,
     check_double_top,
     check_head_and_shoulders_bottom,
@@ -55,6 +57,16 @@ PATTERN_CONFIG = {
         "folder": "head_and_shoulders_bottom",
         "prefix": "HeadAndShouldersBottom",
         "validator": check_head_and_shoulders_bottom,
+    },
+    "ascending_triangle": {
+        "folder": "ascending_triangle",
+        "prefix": "AscendingTriangle",
+        "validator": check_ascending_triangle,
+    },
+    "descending_triangle": {
+        "folder": "descending_triangle",
+        "prefix": "DescendingTriangle",
+        "validator": check_descending_triangle,
     },
 }
 
@@ -236,11 +248,57 @@ def skeleton_head_shoulders_bottom(rng, length):
     ]
 
 
+def skeleton_ascending_triangle(rng, length):
+    resistance = rng.uniform(108.0, 114.0)
+    low1 = resistance - rng.uniform(18.0, 23.0)
+    low2 = low1 + rng.uniform(4.0, 7.0)
+    low3 = low2 + rng.uniform(3.0, 6.0)
+    breakout = resistance + rng.uniform(2.8, 6.5)
+    ending = breakout + rng.uniform(1.0, 4.0)
+
+    return [
+        (0, low1 + rng.uniform(2.0, 5.0)),
+        (4, low1),
+        (7, resistance * (1 + rng.uniform(-0.006, 0.006))),
+        (11, low2),
+        (15, resistance * (1 + rng.uniform(-0.006, 0.006))),
+        (19, low3),
+        (23, resistance * (1 + rng.uniform(-0.006, 0.006))),
+        (25, low3 + rng.uniform(1.0, 3.0)),
+        (27, breakout),
+        (length - 1, ending),
+    ]
+
+
+def skeleton_descending_triangle(rng, length):
+    support = rng.uniform(86.0, 92.0)
+    high1 = support + rng.uniform(18.0, 24.0)
+    high2 = high1 - rng.uniform(4.0, 7.0)
+    high3 = high2 - rng.uniform(3.0, 6.0)
+    breakdown = support - rng.uniform(2.6, 6.2)
+    ending = breakdown - rng.uniform(1.0, 4.0)
+
+    return [
+        (0, high1 - rng.uniform(2.0, 5.0)),
+        (4, high1),
+        (7, support * (1 + rng.uniform(-0.006, 0.006))),
+        (11, high2),
+        (15, support * (1 + rng.uniform(-0.006, 0.006))),
+        (19, high3),
+        (23, support * (1 + rng.uniform(-0.006, 0.006))),
+        (25, high3 - rng.uniform(1.0, 3.0)),
+        (27, breakdown),
+        (length - 1, ending),
+    ]
+
+
 SKELETON_BUILDERS = {
     "double_bottom": skeleton_double_bottom,
     "double_top": skeleton_double_top,
     "head_and_shoulders_top": skeleton_head_shoulders_top,
     "head_and_shoulders_bottom": skeleton_head_shoulders_bottom,
+    "ascending_triangle": skeleton_ascending_triangle,
+    "descending_triangle": skeleton_descending_triangle,
 }
 
 

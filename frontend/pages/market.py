@@ -543,7 +543,7 @@ def _render_market_distribution(payload: dict[str, Any]) -> None:
 
 def _render_rank_section(payload: dict[str, Any]) -> None:
     st.markdown(
-        build_panel_header("热门榜单", "快速查看涨幅、跌幅、成交额和换手率靠前的个股", "个股排行"),
+        build_panel_header("热门榜单", "快速查看当前市场涨幅、跌幅、成交额和成交量排名靠前的个股", "个股排行"),
         unsafe_allow_html=True,
     )
     rank_col1, rank_col2, rank_col3, rank_col4 = st.columns(4)
